@@ -4,7 +4,7 @@ const app = express();
 
 // ✅ Only your Netlify site can call this
 app.use(cors({ 
-  origin: 'https://YOUR-SITE.netlify.app' // replace with your URL
+  origin: origin: 'https://asgsbvrsp1003152.netlify.app' // replace with your URL
 }));
 app.use(express.json());
 
