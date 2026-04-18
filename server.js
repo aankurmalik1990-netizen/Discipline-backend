@@ -2,21 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 
-// ✅ Only your Netlify site can call this
-app.use(cors({ 
-  origin:'https://asgsbvrsp1003152.netlify.app' // replace with your URL
-}));
+app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-// ✅ Health check
 app.get('/', (req, res) => {
   res.json({ status: 'Discipline Backend Running ✅' });
 });
 
-// ✅ Generate AI discipline report
 app.post('/generate-report', async (req, res) => {
   try {
-    const { studentName, grade, incidents } = req.body;
+    const { studentName, grade, incidents, pastCount, school } = req.body;
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -26,45 +21,23 @@ app.post('/generate-report', async (req, res) => {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514',
+        model: 'claude-haiku-4-5-20251001',
         max_tokens: 1000,
         messages: [{
           role: 'user',
-          content: `You are a school discipline assistant. Write a professional 
-          discipline report for the following student:
-          
-          Name: ${studentName}
-          Grade: ${grade}
-          Incidents: ${JSON.stringify(incidents)}
-          
-          Write a formal, respectful report suitable for parents and school records.`
+          content: `You are a school discipline assistant at ${school}. Write a formal discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}, Past violations: ${pastCount}. Keep it under 150 words, formal and respectful.`
         }]
       })
     });
 
     const data = await response.json();
+    if(data.error) {
+      return res.status(500).json({ error: data.error.message });
+    }
     res.json({ report: data.content[0].text });
 
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to generate report' });
-  }
-});
-
-// ✅ Log a new incident
-app.post('/log-incident', async (req, res) => {
-  try {
-    const { studentName, grade, description, severity, teacherName } = req.body;
-    
-    // For now returns success — later connect to database
-    res.json({ 
-      success: true, 
-      message: 'Incident logged',
-      incident: { studentName, grade, description, severity, teacherName, date: new Date() }
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to log incident' });
+    res.status(500).json({ error: error.message });
   }
 });
 
