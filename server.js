@@ -5,39 +5,20 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-app.get('/', (req, res) => {
-  res.json({ status: 'Discipline Backend Running ✅' });
+app.get('/', async (req, res) => {
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models?key=${process.env.GEMINI_API_KEY}`
+    );
+    const data = await response.json();
+    res.json(data);
+  } catch(e) {
+    res.json({ error: e.message });
+  }
 });
 
 app.post('/generate-report', async (req, res) => {
-  try {
-    const { studentName, grade, incidents, pastCount, school } = req.body;
-
-    const apiResponse = await fetch(
-     `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `Write a formal school discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}, School: ${school}. Keep it under 150 words, formal and respectful.`
-            }]
-          }]
-        })
-      }
-    );
-
-    const data = await apiResponse.json();
-    console.log('Gemini response:', JSON.stringify(data));
-
-    const report = data.candidates[0].content.parts[0].text;
-    res.json({ report });
-
-  } catch (error) {
-    console.log('Error:', error.message);
-    res.status(500).json({ error: error.message });
-  }
+  res.json({ report: 'Test mode' });
 });
 
 const PORT = process.env.PORT || 3000;
