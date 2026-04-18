@@ -13,41 +13,29 @@ app.post('/generate-report', async (req, res) => {
   try {
     const { studentName, grade, incidents, pastCount, school } = req.body;
 
-    const apiResponse = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.CLAUDE_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1000,
-        messages: [{
-          role: 'user',
-          content: `Write a formal school discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}. Keep it under 150 words.`
-        }]
-      })
-    });
+    const apiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `Write a formal school discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}, School: ${school}. Keep it under 150 words, formal and respectful.`
+            }]
+          }]
+        })
+      }
+    );
 
-    const text = await apiResponse.text();
-    console.log('API Response:', text); // log full response
-    const data = JSON.parse(text);
+    const data = await apiResponse.json();
+    console.log('Gemini response:', JSON.stringify(data));
 
-    if(data.error) {
-      console.log('API Error:', data.error);
-      return res.status(500).json({ error: data.error.message });
-    }
-
-    if(!data.content || !data.content[0]) {
-      console.log('Unexpected response:', JSON.stringify(data));
-      return res.status(500).json({ error: 'Unexpected API response' });
-    }
-
-    res.json({ report: data.content[0].text });
+    const report = data.candidates[0].content.parts[0].text;
+    res.json({ report });
 
   } catch (error) {
-    console.log('Catch error:', error.message);
+    console.log('Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
