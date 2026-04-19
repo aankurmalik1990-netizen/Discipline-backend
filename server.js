@@ -6,8 +6,8 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // Supabase setup
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://cyepadaagpiblzgdytrf.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_SECRET;
 
 async function supabase(table, method, data = null, filter = null) {
   let url = `${SUPABASE_URL}/rest/v1/${table}`;
