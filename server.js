@@ -20,7 +20,7 @@ app.post('/generate-report', async (req, res) => {
         'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
       },
       body: JSON.stringify({
-        model:'mixtral-8x7b-32768',
+        model:'llama-3.3-70b-versatile',
         messages: [{
           role: 'user',
           content: `Write a formal school discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}, School: ${school}. Keep it under 150 words, formal and respectful.`
