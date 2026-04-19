@@ -117,13 +117,6 @@ app.post('/generate-report', async function(req, res) {
     res.status(500).json({ error: error.message });
   }
 });
-    const data = await apiResponse.json();
-    const report = data.candidates[0].content.parts[0].text;
-    res.json({ report: report });
-  } catch(error) {
-    res.status(500).json({ error: error.message });
-  }
-});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, function() {
