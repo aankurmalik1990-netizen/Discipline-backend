@@ -5,37 +5,123 @@ const app = express();
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
+// Supabase setup
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+async function supabase(table, method, data = null, filter = null) {
+  let url = `${SUPABASE_URL}/rest/v1/${table}`;
+  if (filter) url += `?${filter}`;
+  const res = await fetch(url, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Prefer': method === 'POST' ? 'return=minimal' : ''
+    },
+    body: data ? JSON.stringify(data) : undefined
+  });
+  if (method === 'GET') return await res.json();
+  return res.status;
+}
+
 app.get('/', (req, res) => {
   res.json({ status: 'Discipline Backend Running ✅' });
 });
 
+// Save incident
+app.post('/save-incident', async (req, res) => {
+  try {
+    await supabase('incidents', 'POST', req.body);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get all incidents
+app.get('/get-incidents', async (req, res) => {
+  try {
+    const data = await supabase('incidents', 'GET', null, 'order=created_at.desc');
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Save custom user
+app.post('/save-user', async (req, res) => {
+  try {
+    await supabase('custom_users', 'POST', req.body);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get custom users
+app.get('/get-users', async (req, res) => {
+  try {
+    const data = await supabase('custom_users', 'GET');
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete custom user
+app.delete('/delete-user/:id', async (req, res) => {
+  try {
+    await supabase('custom_users', 'DELETE', null, `id=eq.${req.params.id}`);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Save custom class
+app.post('/save-class', async (req, res) => {
+  try {
+    await supabase('custom_classes', 'POST', req.body);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get custom classes
+app.get('/get-classes', async (req, res) => {
+  try {
+    const data = await supabase('custom_classes', 'GET');
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// AI Report
 app.post('/generate-report', async (req, res) => {
   try {
     const { studentName, grade, incidents, pastCount, school } = req.body;
-
-    const apiResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
-      },
-      body: JSON.stringify({
-        model:'llama-3.3-70b-versatile',
-        messages: [{
-          role: 'user',
-          content: `Write a formal school discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}, School: ${school}. Keep it under 150 words, formal and respectful.`
-        }],
-        max_tokens: 500
-      })
-    });
-
+    const apiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `Write a formal school discipline report in Hindi for parents. Student: ${studentName}, Class: ${grade}, Violation: ${incidents[0].violation}, Date: ${incidents[0].date}, School: ${school}. Keep it under 150 words, formal and respectful.`
+            }]
+          }]
+        })
+      }
+    );
     const data = await apiResponse.json();
-    console.log('Groq response:', JSON.stringify(data));
-    const report = data.choices[0].message.content;
+    const report = data.candidates[0].content.parts[0].text;
     res.json({ report });
-
   } catch (error) {
-    console.log('Error:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
