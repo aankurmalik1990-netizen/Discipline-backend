@@ -15,11 +15,11 @@ async function supabase(table, method, data = null, filter = null) {
   const res = await fetch(url, {
     method,
     headers: {
-      'Content-Type': 'application/json',
-      'apikey': SUPABASE_KEY,
-      'Authorization': `Bearer ${SUPABASE_KEY}`,
-      'Prefer': method === 'POST' ? 'return=minimal' : ''
-    },
+  'Content-Type': 'application/json',
+  'apikey': process.env.SUPABASE_SECRET,
+  'Authorization': `Bearer ${process.env.SUPABASE_SECRET}`,
+  'Prefer': method === 'POST' ? 'return=minimal' : ''
+},
     body: data ? JSON.stringify(data) : undefined
   });
   if (method === 'GET') return await res.json();
