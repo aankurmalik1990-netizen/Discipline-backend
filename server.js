@@ -6,8 +6,7 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const SUPABASE_URL = 'https://cyepadaagpiblzgdytrf.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_KEY || process.env.SUPABASE_SEC || '';
-
+const SUPABASE_KEY = process.env.DB_KEY || process.env.SUPABASE_KEY ||'';
 async function db(table, method, data = null, filter = null) {
   let url = `${SUPABASE_URL}/rest/v1/${table}`;
   if (filter) url += `?${filter}`;
@@ -34,8 +33,7 @@ app.get('/', (req, res) => {
   res.json({ 
   status: 'Discipline Backend Running ✅', 
   key_set: !!SUPABASE_KEY,
-  env_keys: Object.keys(process.env).filter(k => k.includes('SUPA'))
-});
+  env_keys: Object.keys(process.env).filter(k => k.includes('DB') || k.includes('SUPA'))
 });
 
 app.get('/test-db', async (req, res) => {
