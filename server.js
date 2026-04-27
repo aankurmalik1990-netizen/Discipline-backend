@@ -105,14 +105,14 @@ app.post('/update-user', async function(req, res) {
 app.post('/generate-report', async function(req, res) {
   try {
     const { studentName, grade, incidents, school } = req.body;
-    const apiResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    const apiResponse = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + process.env.GROQ_API_KEY
+        'Authorization': 'Bearer ' + process.env.GEMINI_API_KEY
       },
       body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
+        model: 'Gemini-2.5-pro',
         max_tokens: 500,
         messages: [{
           role: 'user',
@@ -121,7 +121,7 @@ app.post('/generate-report', async function(req, res) {
       })
     });
     const data = await apiResponse.json();
-    console.log('Groq report:', JSON.stringify(data).substring(0, 200));
+    console.log('Gemini report:', JSON.stringify(data).substring(0, 200));
     const report = data.choices[0].message.content;
     res.json({ report });
   } catch(error) {
@@ -130,7 +130,7 @@ app.post('/generate-report', async function(req, res) {
   }
 });
 
-// ── Arrangement Photo OCR (Gemini 2.0 Flash Vision) ──
+// ── Arrangement Photo OCR (Gemini-2.5-pro Vision) ──
 app.post('/read-arrangement', async function(req, res) {
   try {
     const { imageBase64, mimeType } = req.body;
@@ -155,7 +155,7 @@ Rules:
 - Return ONLY the JSON array, nothing else`;
 
     const geminiRes = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + process.env.GEMINI_API_KEY,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=' + process.env.GEMINI_API_KEY,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
