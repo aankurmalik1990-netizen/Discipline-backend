@@ -130,7 +130,7 @@ app.post('/generate-report', async function(req, res) {
   }
 });
 
-// ── Arrangement Photo OCR (Gemini 2.5 Flash Vision) ──
+// ── Arrangement Photo OCR (Gemini 2.0 Flash Vision) ──
 app.post('/read-arrangement', async function(req, res) {
   try {
     const { imageBase64, mimeType } = req.body;
@@ -155,7 +155,7 @@ Rules:
 - Return ONLY the JSON array, nothing else`;
 
     const geminiRes = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + process.env.GEMINI_API_KEY,
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + process.env.GEMINI_API_KEY,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
