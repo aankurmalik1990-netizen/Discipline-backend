@@ -563,10 +563,11 @@ app.post('/circular-summary', async function(req, res) {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, function() {
+const PORT = process.env.PORT || 10000; // Use 10000 as a fallback for Render
+app.listen(PORT, '0.0.0.0', function() { // Added '0.0.0.0' to allow external access
   console.log('Server running on port ' + PORT);
 });
+
 
 // Global crash protectors — keep the process alive on unexpected errors.
 // Without these, a single bad request can take down the whole server.
