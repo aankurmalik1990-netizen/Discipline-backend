@@ -1,0 +1,640 @@
+const express = require('express');
+const cors = require('cors');
+const app = express();
+
+app.use(cors({ origin: '*' }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ limit: '20mb', extended: true }));
+
+const SUPABASE_URL = 'https://cyepadaagpiblzgdytrf.supabase.co';
+const SUPABASE_KEY = process.env.DB_KEY || '';
+
+async function db(table, method, data, filter) {
+  let url = SUPABASE_URL + '/rest/v1/' + table;
+  if (filter) url += '?' + filter;
+  const res = await fetch(url, {
+    method: method,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'apikey': SUPABASE_KEY,
+      'Prefer': 'return=minimal'
+    },
+    body: data ? JSON.stringify(data) : undefined
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error('Supabase ' + method + ' ' + table + ' failed (' + res.status + '): ' + errText);
+  }
+  if (method === 'GET') return await res.json();
+  return res.status;
+}
+
+// ── Gemini retry helper ──
+// Retries once on 429/503/UNAVAILABLE, then falls back to gemini-2.5-flash-lite.
+function sleep(ms) { return new Promise(function(r){ setTimeout(r, ms); }); }
+
+async function callGeminiOpenAI(modelList, body) {
+  let lastData = null;
+  for (let m = 0; m < modelList.length; m++) {
+    const model = modelList[m];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const resp = await fetch('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + process.env.GEMINI_API_KEY
+        },
+        body: JSON.stringify(Object.assign({}, body, { model: model }))
+      });
+      const data = await resp.json();
+      if (resp.ok && data.choices && data.choices[0]) {
+        return { ok: true, data: data, model: model };
+      }
+      lastData = data;
+      const code = (data && data.error && data.error.code) || resp.status;
+      const retryable = (code === 429 || code === 503 || code === 500);
+      console.log('Gemini ' + model + ' attempt ' + (attempt+1) + ' failed (' + code + '), retryable=' + retryable);
+      if (!retryable) break;
+      if (attempt === 0) await sleep(1500);
+    }
+  }
+  return { ok: false, data: lastData };
+}
+
+async function callGeminiNative(modelList, body) {
+  let lastData = null;
+  for (let m = 0; m < modelList.length; m++) {
+    const model = modelList[m];
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const resp = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/' + model + ':generateContent?key=' + process.env.GEMINI_API_KEY,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }
+      );
+      const data = await resp.json();
+      if (resp.ok && data.candidates && data.candidates[0]) {
+        return { ok: true, data: data, model: model };
+      }
+      lastData = data;
+      const code = (data && data.error && data.error.code) || resp.status;
+      const retryable = (code === 429 || code === 503 || code === 500);
+      console.log('Gemini ' + model + ' attempt ' + (attempt+1) + ' failed (' + code + '), retryable=' + retryable);
+      if (!retryable) break;
+      if (attempt === 0) await sleep(1500);
+    }
+  }
+  return { ok: false, data: lastData };
+}
+
+// ── Health check ──
+app.get('/', function(req, res) {
+  res.json({
+    status: 'Running',
+    key_set: SUPABASE_KEY.length > 0,
+    key_start: SUPABASE_KEY.substring(0, 10)
+  });
+});
+
+app.get('/test-db', async function(req, res) {
+  try {
+    const result = await db('incidents', 'GET', null, 'limit=1');
+    res.json({ success: true, result: result });
+  } catch(e) {
+    res.json({ success: false, error: e.message });
+  }
+});
+
+// ── Incidents ──
+app.post('/save-incident', async function(req, res) {
+  try {
+    await db('incidents', 'POST', req.body, null);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/get-incidents', async function(req, res) {
+  try {
+    const data = await db('incidents', 'GET', null, 'order=created_at.desc');
+    res.json(data);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Users ──
+app.post('/save-user', async function(req, res) {
+  try {
+    await db('custom_users', 'POST', req.body, null);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/get-users', async function(req, res) {
+  try {
+    const data = await db('custom_users', 'GET', null, null);
+    res.json(data);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/delete-user/:id', async function(req, res) {
+  try {
+    await db('custom_users', 'DELETE', null, 'id=eq.' + req.params.id);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/update-user', async function(req, res) {
+  try {
+    const { username, password } = req.body;
+    await db('custom_users', 'PATCH', { password: password }, 'username=eq.' + username);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── AI Report ──
+app.post('/generate-report', async function(req, res) {
+  try {
+    const { studentName, grade, incidents, school } = req.body;
+    const apiResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + process.env.GROQ_API_KEY
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: 'Write a formal school discipline report in English for parents. Student: ' + studentName + ', Class: ' + grade + ', Violation: ' + incidents[0].violation + ', School: ' + school + '. Keep it under 150 words, formal and respectful.'
+        }]
+      })
+    });
+
+    const data = await apiResponse.json();
+    console.log('Groq report:', JSON.stringify(data).substring(0, 200));
+
+    if (!apiResponse.ok || !data.choices || !data.choices[0]) {
+      console.error('Groq Error:', JSON.stringify(data));
+      return res.status(500).json({ error: 'Groq Error', details: data });
+    }
+
+    const report = data.choices[0].message.content;
+    res.json({ report });
+  } catch(error) {
+    console.log('Groq Report Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ── Arrangement Photo OCR (Gemini-2.5-flash Vision) ──
+app.post('/read-arrangement', async function(req, res) {
+  try {
+    const { imageBase64, mimeType } = req.body;
+    if (!imageBase64) { res.status(400).json({ error: 'No image provided' }); return; }
+
+    const TEACHER_LIST = [
+      "HARI KISHAN MAHAVARIA","VINOD SHARMA","VIJAY PAL","CHARAN SINGH","V.K. YADAV",
+      "MANOJ (H)","MANOJ (C)","YESPAL SINGH","ABHA SHARMA","PURNIMA GUPTA",
+      "SHUBHAM SHARMA","PRASHANT BAJPAI","VIKAS KUMAR","MUNESH KUMAR","SONU",
+      "VIKAS SHARMA","ROHITASH PAREEK","ANKUR MALIK","GOVIND SINGH","AMRIT SINGH",
+      "RAKESH KUMAR GUPTA","MH ASHIQEEN","SHRYANSH JAIN","HASANUZZAMAN","ROHIT KUMAR",
+      "PRADEEP KUMAR","AMAN MISHRA","MAYANK YADAV","GAJENDRA NARAYAN","RAKESH ROSHAN",
+      "BRIJESH PAL","MANOJ KUMAR ARORA","MAMTA RANI","BHOJ RAJ SINGH","RAJKUMARI",
+      "GURJEET SINGH","SHAIFALI TOMAR","LUXMI","MITHLESH KUMARI","RAMKESH MEENA",
+      "ASMITA KUMARI","KUNDAN KUMAR","PINTU KUMAR","ROHIT KUMAR SAINI","KANCHAN VERMA",
+      "RUPESH KUMAR","ASHISH PRAJAPTI","MAHESH DUBEY","MOHAN LAL","PRITIMA KUMARI",
+      "POOJA KHANNA","ROHIT SAINI"
+    ];
+
+    const CLASS_LIST = [
+      "XII A","XII B","XII C","XII D",
+      "XI A","XI B","XI C","XI D",
+      "X A","X B","X C","X D",
+      "IX A","IX B","IX C","IX D","IX E",
+      "VIII A","VIII B","VIII C","VIII D","VIII E",
+      "VII A","VII B","VII C","VII D",
+      "VI A","VI B","VI C","VI D"
+    ];
+
+    const prompt = `Extract teacher arrangement data from this school arrangement sheet photo.
+
+STEP 1 — First, carefully scan the ENTIRE image from top to bottom and count how many class+teacher entries are in EACH column. Do not skip any row.
+
+STEP 2 — Then extract every single entry.
+
+HOW TO READ:
+- Each numbered COLUMN (1,2,3...8) = one period. Column 1="I", 2="II", 3="III", 4="IV", 5="V", 6="VI", 7="VII", 8="VIII"
+- Inside each column: CLASS is on top, TEACHER NAME is below it
+- One column typically has 3 to 6 entries stacked vertically — make sure you get ALL of them, not just the top 2-3
+- MERGE RULE — If class written as "XII B+A": first class (XII B) is absentClass, second class (XII A) is mergeClass, type="merge". Same for "X D+C" → absentClass="X D", mergeClass="X C", type="merge". "IX A+B" → absentClass="IX A", mergeClass="IX B", type="merge".
+- DUTY RULE — If only ONE class written with no "+" sign, it is type="duty" with mergeClass=null.
+
+VALID CLASS NAMES — absentClass and mergeClass must be exactly one of these:
+${CLASS_LIST.join(', ')}
+
+TEACHER NAME MATCHING — match handwritten name to exact name from this list:
+${TEACHER_LIST.join(', ')}
+
+EXAMPLE output format:
+[
+  { "period": "I", "absentClass": "XII B", "mergeClass": "XII A", "teacher": "YESPAL SINGH", "type": "merge" },
+  { "period": "I", "absentClass": "X D", "mergeClass": "X C", "teacher": "MH ASHIQEEN", "type": "merge" },
+  { "period": "II", "absentClass": "XI B", "mergeClass": null, "teacher": "SHUBHAM SHARMA", "type": "duty" }
+]
+
+Return ONLY the JSON array, nothing else.
+- Read every cell confidently. Only mark as [unclear] if a word is genuinely unreadable even after careful observation — not just difficult handwriting.
+- Only skip a cell if it is truly blank (nothing written in it). If any text is present, attempt to read it and match to the teacher list.`;
+
+    const result = await callGeminiNative(
+      ['gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+      {
+        contents: [{
+          parts: [
+            { inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } },
+            { text: prompt }
+          ]
+        }],
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 16000,
+          thinkingConfig: { thinkingBudget: 10000 }
+        }
+      }
+    );
+
+    if (!result.ok) {
+      console.error('Gemini OCR Error (all retries failed):', JSON.stringify(result.data));
+      return res.status(503).json({ error: 'Gemini temporarily unavailable, please try again.', details: result.data });
+    }
+
+    const data = result.data;
+    console.log('Gemini OCR (' + result.model + '):', JSON.stringify(data).substring(0, 1500));
+
+    // Defensive: response may be missing parts/text on safety blocks
+    if (!data.candidates[0].content || !data.candidates[0].content.parts || !data.candidates[0].content.parts[0]) {
+      console.error('Gemini OCR: empty content', JSON.stringify(data).substring(0, 500));
+      return res.status(500).json({ error: 'Empty response from AI, please retry.' });
+    }
+
+    let text = data.candidates[0].content.parts[0].text || '';
+    text = text.trim().replace(/```json|```/g, '').trim();
+
+    // Robust JSON extraction — never let a parse error crash the process
+    let arrangements = null;
+    try {
+      arrangements = JSON.parse(text);
+    } catch(e1) {
+      // Try finding the array in the text
+      const match = text.match(/\[[\s\S]*\]/);
+      if (match) {
+        try { arrangements = JSON.parse(match[0]); } catch(e2) { /* fall through */ }
+      }
+      // Last resort: trim trailing garbage and try again (handles truncation)
+      if (!arrangements) {
+        const lastClose = text.lastIndexOf('}');
+        if (lastClose > 0) {
+          try { arrangements = JSON.parse(text.substring(0, lastClose + 1) + ']'); } catch(e3) { /* give up */ }
+        }
+      }
+    }
+
+    if (!Array.isArray(arrangements)) {
+      console.error('OCR parse failed. Raw text:', text.substring(0, 500));
+      return res.status(500).json({ error: 'Could not parse AI response. Please retry with a clearer photo.' });
+    }
+
+    res.json({ arrangements });
+  } catch(error) {
+    console.log('OCR Error:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ════════════════════════════════════════
+// 📅 ARRANGEMENT ROUTES
+// ════════════════════════════════════════
+
+// Save today's arrangement (upsert by date)
+// Supabase table: arrangements
+// Columns: id, date (TEXT, unique), data (JSONB), saved_at (TIMESTAMPTZ)
+app.post('/save-arrangement', async function(req, res) {
+  try {
+    const { date, data } = req.body;
+    if (!date || !data) return res.status(400).json({ error: 'date and data required' });
+
+    // Upsert: insert or replace by date
+    const url = SUPABASE_URL + '/rest/v1/arrangements';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'apikey': SUPABASE_KEY,
+        'Prefer': 'resolution=merge-duplicates,return=minimal'
+      },
+      body: JSON.stringify({ date: date, data: data, saved_at: new Date().toISOString() })
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error('Supabase upsert arrangements failed: ' + errText);
+    }
+    res.json({ success: true });
+  } catch(e) {
+    console.error('save-arrangement error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get arrangement for a specific date (or today)
+app.get('/get-arrangement', async function(req, res) {
+  try {
+    const date = req.query.date;
+    if (!date) return res.status(400).json({ error: 'date query param required' });
+    const data = await db('arrangements', 'GET', null, 'date=eq.' + encodeURIComponent(date) + '&limit=1');
+    if (!data || data.length === 0) return res.json({ found: false });
+    res.json({ found: true, date: data[0].date, data: data[0].data, savedAt: data[0].saved_at });
+  } catch(e) {
+    console.error('get-arrangement error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete arrangement for a specific date (admin only)
+app.delete('/delete-arrangement', async function(req, res) {
+  try {
+    const date = req.query.date;
+    if (!date) return res.status(400).json({ error: 'date query param required' });
+    await db('arrangements', 'DELETE', null, 'date=eq.' + encodeURIComponent(date));
+    res.json({ success: true });
+  } catch(e) {
+    console.error('delete-arrangement error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ════════════════════════════════════════
+// 🔧 MAINTENANCE ROUTES
+// ════════════════════════════════════════
+
+// Save new maintenance report
+app.post('/save-maintenance', async function(req, res) {
+  try {
+    const record = {
+      room:        req.body.room,
+      issues:      req.body.issues,
+      description: req.body.description || '',
+      priority:    req.body.priority || 'low',
+      teacher:     req.body.teacher,
+      status:      'pending',
+      report_date: req.body.date,
+      report_time: req.body.time,
+    };
+    await db('maintenance', 'POST', record, null);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get all maintenance reports (admin) or by teacher
+app.get('/get-maintenance', async function(req, res) {
+  try {
+    const teacher = req.query.teacher;
+    let filter = 'order=created_at.desc';
+    if (teacher) filter += '&teacher=eq.' + encodeURIComponent(teacher);
+    const data = await db('maintenance', 'GET', null, filter);
+    res.json(data);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update maintenance status (admin)
+app.post('/update-maintenance', async function(req, res) {
+  try {
+    const { id, status } = req.body;
+    await db('maintenance', 'PATCH', { status: status }, 'id=eq.' + id);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete maintenance report (admin)
+app.delete('/delete-maintenance/:id', async function(req, res) {
+  try {
+    await db('maintenance', 'DELETE', null, 'id=eq.' + req.params.id);
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ════════════════════════════════════════
+// 📢 CIRCULAR ROUTES
+// ════════════════════════════════════════
+
+// Save new circular — admin uploads photo + assigns teachers
+// Supabase table: circulars
+// Columns: id, title, image_base64, image_mime, assigned_to (TEXT[]), created_by, created_at, date
+app.post('/save-circular', async function(req, res) {
+  try {
+    const record = {
+      title:        req.body.title,
+      image_base64: req.body.image_base64,       // first page (for backwards compat)
+      image_mime:   req.body.image_mime || 'image/jpeg',
+      pages:        req.body.pages || null,       // JSONB array of all pages [{base64,mime}]
+      assigned_to:  req.body.assigned_to,
+      created_by:   req.body.created_by,
+      created_at:   req.body.created_at || new Date().toISOString(),
+      date:         req.body.date
+    };
+
+    // Use 'return=representation' so we get the new row's id back
+    const url = SUPABASE_URL + '/rest/v1/circulars';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'apikey': SUPABASE_KEY,
+        'Prefer': 'return=representation'
+      },
+      body: JSON.stringify(record)
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error('Supabase insert circulars failed: ' + errText);
+    }
+
+    const data = await r.json();
+    res.json({ success: true, id: data[0] && data[0].id });
+  } catch(e) {
+    console.error('save-circular error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get circulars — all rows for admin, or filtered by teacher name
+// ?teacher=NAME  →  returns only circulars where that teacher is in assigned_to array
+app.get('/get-circulars', async function(req, res) {
+  try {
+    const teacher = req.query.teacher;
+    let filter = 'order=created_at.desc';
+
+    if (teacher) {
+      // Supabase array-contains filter: assigned_to @> '{"TEACHER NAME"}'
+      filter += '&assigned_to=cs.{"' + teacher.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"}';
+    }
+
+    const data = await db('circulars', 'GET', null, filter);
+
+    // Rebuild image_url from base64 so the frontend <img> tag works directly
+    const rows = data.map(function(c) {
+      return Object.assign({}, c, {
+        image_url: c.image_base64
+          ? 'data:' + (c.image_mime || 'image/jpeg') + ';base64,' + c.image_base64
+          : null,
+        pages: c.pages || null   // pass through pages array as-is (JSONB from Supabase)
+      });
+    });
+
+    res.json(rows);
+  } catch(e) {
+    console.error('get-circulars error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Mark a circular as read by a specific teacher
+// Supabase table: circular_reads
+// Columns: id, circular_id (FK → circulars.id), teacher_name, read_at
+app.post('/mark-circular-read', async function(req, res) {
+  try {
+    const record = {
+      circular_id:  req.body.circular_id,
+      teacher_name: req.body.teacher_name
+    };
+
+    // 'ignore-duplicates' means re-opening a circular won't throw a unique-constraint error
+    const url = SUPABASE_URL + '/rest/v1/circular_reads';
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'apikey': SUPABASE_KEY,
+        'Prefer': 'resolution=ignore-duplicates,return=minimal'
+      },
+      body: JSON.stringify(record)
+    });
+
+    if (!r.ok) {
+      const errText = await r.text();
+      throw new Error('Supabase insert circular_reads failed: ' + errText);
+    }
+
+    res.json({ success: true });
+  } catch(e) {
+    console.error('mark-circular-read error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Delete a circular (admin only)
+// ON DELETE CASCADE in the DB automatically removes all circular_reads rows for it
+app.delete('/delete-circular/:id', async function(req, res) {
+  try {
+    await db('circulars', 'DELETE', null, 'id=eq.' + req.params.id);
+    res.json({ success: true });
+  } catch(e) {
+    console.error('delete-circular error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// Circular AI Summary — Groq vision model reads images directly
+app.post('/circular-summary', async function(req, res) {
+  try {
+    const { pages, image_base64, image_mime, lang } = req.body;
+
+    const allPages = (pages && pages.length > 0)
+      ? pages
+      : [{ base64: image_base64, mime: image_mime || 'image/jpeg' }];
+
+    if (!allPages[0] || !allPages[0].base64) {
+      return res.status(400).json({ error: 'No image provided' });
+    }
+
+    const prompt = lang === 'hindi'
+      ? 'Yeh ek school circular ki image hai. Is circular ka ek detailed aur complete summary SIRF Hindi mein likho. Saare important points bullet points mein do. Dates, deadlines aur instructions clearly mention karo. Teacher ke liye kya action lena hai woh bhi clearly batao.'
+      : 'This is a school circular image. Provide a detailed and complete summary in English only. Use bullet points for all key points. Clearly mention any dates, deadlines, and instructions. State what action the teacher needs to take.';
+
+    // Build content array — one image per page + text prompt at end
+    const messageContent = allPages.map(function(p) {
+      return {
+        type: 'image_url',
+        image_url: { url: 'data:' + (p.mime || 'image/jpeg') + ';base64,' + p.base64 }
+      };
+    });
+    messageContent.push({ type: 'text', text: prompt });
+
+    const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + process.env.GROQ_API_KEY
+      },
+      body: JSON.stringify({
+        model: 'meta-llama/llama-4-maverick-17b-128e-instruct',
+        max_tokens: 4000,
+        temperature: 0.3,
+        messages: [{ role: 'user', content: messageContent }]
+      })
+    });
+
+    const groqData = await groqRes.json();
+    if (!groqRes.ok || !groqData.choices || !groqData.choices[0]) {
+      console.error('Groq vision error:', JSON.stringify(groqData));
+      return res.status(500).json({ error: 'Could not generate summary. Please retry.' });
+    }
+
+    const summary = groqData.choices[0].message.content || '';
+    res.json({ summary: summary.trim() });
+  } catch(e) {
+    console.error('circular-summary error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, function() {
+  console.log('Server running on port ' + PORT);
+});
+
+// Global crash protectors — keep the process alive on unexpected errors.
+// Without these, a single bad request can take down the whole server.
+process.on('uncaughtException', function(err) {
+  console.error('UNCAUGHT EXCEPTION:', err && err.stack ? err.stack : err);
+});
+process.on('unhandledRejection', function(reason) {
+  console.error('UNHANDLED REJECTION:', reason);
+});
