@@ -545,7 +545,7 @@ app.post('/circular-summary', async function(req, res) {
 (Yeh circular kiski liye hai — kaunse teachers, staff, classes ya students. Agar nahi hai toh "Sabke liye")
 
 📌 KEY NOTES
-(3-5 bullet points — sirf sabse important instructions ya highlights)
+(5-7 bullet points — sirf sabse important instructions ya highlights)
 
 👨‍🏫 TEACHER DUTY
 (Teacher ko kya karna hai — kya submit karna hai, kya follow karna hai)
@@ -555,7 +555,7 @@ Har section short rakho. Ek section ki baat doosre mein repeat mat karo. Sirf Hi
     const promptEnglish = `This is a school circular image. Do NOT write a full paragraph summary. Respond ONLY in the following structured format:
 
 📋 SUMMARY
-(1-2 lines max — what this circular is about)
+(3-4 lines max — what this circular is about)
 
 📅 DATE
 (Circular issue date if visible, else "Not mentioned")
@@ -588,7 +588,7 @@ Keep each section short and to the point. Do not repeat information across secti
         contents: [{ parts: circParts }],
         generationConfig: {
           temperature: 0.3,
-          maxOutputTokens: 1500
+          maxOutputTokens: 4000
         }
       }
     );
